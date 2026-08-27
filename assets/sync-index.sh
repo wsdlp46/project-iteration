@@ -5,12 +5,14 @@
 # 解决问题：_index.md 的状态列经常失真（标"待启动"但文件实际已存在），
 # 导致 AI 进入版本"第一眼"就是错的。
 #
-# 判定逻辑（按文件存在情况）：
+# 判定逻辑（仅用于采用“目录导航”模板、显式标记“继承资产：无”的版本）：
 #   02-需求文档/ 有 *.md       → 需求完成
 #   03-规格文档/ 有 *.md       → 规格完成
 #   04-原型/     有 *.html     → 原型完成
 #   05-TAPD上传规划/ 有 *.md   → TAPD完成
-#   全部完成                   → 版本状态升级为"待收尾"
+#   上述目录均有文件           → 顶部版本状态辅助标记为"待收尾"
+#
+# 不处理：阶段状态表、没有目录导航表格的索引、初始化后复制上一版资产的版本。
 #
 # 用法：
 #   ./sync-index.sh /path/to/02-迭代/02-V1.0.1     # 校正单个版本
@@ -54,7 +56,18 @@ sync_one() {
     return
   fi
 
-  # 判定各阶段状态
+  if ! grep -qE '^#+[[:space:]]*目录导航' "$idx"; then
+    echo "⚠️  $ver_name: 未找到“目录导航”表格，未改写（请按本版本实际产出更新阶段状态）"
+    return
+  fi
+
+  # 标准版本索引在顶部显式标记“继承资产：有”；旧模板则以非“无”的基准版本保护。
+  if grep -qE '继承资产：有|^>.*基准版本：[^无]' "$idx"; then
+    echo "⚠️  $ver_name: 检测到继承资产信息，文件数量不能代表本版本完成度，未改写"
+    return
+  fi
+
+  # 判定目录导航状态
   local req_files=$(find "$ver/02-需求文档" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
   local spec_files=$(find "$ver/03-规格文档" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
   local proto_files=$(find "$ver/04-原型" -name "*.html" 2>/dev/null | wc -l | tr -d ' ')
@@ -131,14 +144,28 @@ def update_table(text):
 
 new_content, updated = update_table(content)
 
-# 更新版本状态行（顶部 "> 版本：... | 状态：..."）
+# 更新版本状态行；只处理顶部“> 版本：...”这一行，避免跨表格替换。
 all_done = all('完成' in s for s in [req, spec, proto, tapd])
 if all_done:
-    new_content = re.sub(
-        r'(状态：)[^|]*(?=\s*\|)',
-        r'\g<1>待收尾 ',
-        new_content, count=1
-    )
+    lines = new_content.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.startswith('> 版本：'):
+            if '｜ 状态：' in line:
+                lines[i] = re.sub(
+                    r'(｜ 状态：)[^｜\n]*(?=｜|\n|$)',
+                    r'\g<1>待收尾 ',
+                    line,
+                    count=1,
+                )
+            elif '| 状态：' in line:
+                lines[i] = re.sub(
+                    r'(\| 状态：)[^|\n]*(?=\||\n|$)',
+                    r'\g<1>待收尾 ',
+                    line,
+                    count=1,
+                )
+            break
+    new_content = ''.join(lines)
 
 if new_content != content:
     with open(idx, 'w', encoding='utf-8') as f:
